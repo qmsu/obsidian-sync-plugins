@@ -1,0 +1,18 @@
+services:
+  obsidian-sync:
+    build: .
+    image: obsidian-sync-plugins-server:latest
+    container_name: obsidian-sync-plugins-server
+    restart: unless-stopped
+    ports:
+      - "8788:8788"
+    environment:
+      # 必填：openssl rand -hex 32 生成，填入 .env
+      OSPS_TOKEN: ${OSPS_TOKEN:?请在 .env 中设置 OSPS_TOKEN}
+      # 可选覆盖（默认见 Dockerfile ENV）：
+      # OSPS_MAX_BLOB_MB: "512"
+      # OSPS_QUOTA_GB: "50"
+      # OSPS_LOG_RETENTION_DAYS: "30"
+      # OSPS_BATCH_RETENTION_DAYS: "7"
+    volumes:
+      - ./data:/data

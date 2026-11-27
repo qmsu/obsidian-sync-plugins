@@ -1,0 +1,18 @@
+# Go
+server/dev.db
+server/dev-blobs/
+server/data/
+server/*.db
+server/*.db-wal
+server/*.db-shm
+server/obsidian-sync-plugins-server
+
+# Node / plugin
+plugin/node_modules/
+plugin/main.js
+plugin/package-lock.json
+
+# 运行时产物
+.env
+*.log
+.DS_Store

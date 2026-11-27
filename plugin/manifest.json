@@ -1,0 +1,9 @@
+{
+  "id": "fnsync",
+  "name": "FN Sync",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "基于自建服务端的 vault 源文件同步：内容寻址增量同步、断点续传、冲突自动解决（到达序 LWW + 保留双方副本）、支持桌面与手机。",
+  "author": "zg",
+  "isDesktopOnly": false
+}
