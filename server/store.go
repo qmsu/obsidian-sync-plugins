@@ -205,7 +205,8 @@ func (s *Store) resume(since int64, limit int) (int64, []OutChange, error) {
 	}
 	defer rows.Close()
 
-	var out []OutChange
+	// 用空切片而非 nil：nil 序列化成 JSON null，客户端遍历会炸
+	out := make([]OutChange, 0, limit)
 	cursor := since
 	for rows.Next() {
 		var oc OutChange

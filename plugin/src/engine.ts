@@ -157,7 +157,7 @@ export class SyncEngine {
 			since = batch.cursor;
 			// 游标在整批应用（含失败进 pending）之后推进；失败项由 pending 队列补齐
 			await this.state.kvSet("cursor", since);
-			if (batch.changes.length < this.settings.pullBatchSize) break;
+			if ((batch.changes ?? []).length < this.settings.pullBatchSize) break;
 		}
 		await this.state.kvSet("cursor", since);
 	}
@@ -177,8 +177,8 @@ export class SyncEngine {
 	}
 
 	/** 应用一批远端变更。rebuild=true 表示快照页（未知基线按"不可信本地"处理）。 */
-	private async applyChanges(changes: PullChange[], rebuild = false): Promise<void> {
-		for (const ch of changes) {
+	private async applyChanges(changes: PullChange[] | null | undefined, rebuild = false): Promise<void> {
+		for (const ch of changes ?? []) {
 			if (this.excluder.match(ch.path)) continue;
 			try {
 				if (ch.deleted) {
