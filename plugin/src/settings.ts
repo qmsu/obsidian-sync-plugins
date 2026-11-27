@@ -1,7 +1,16 @@
 // 插件设置
+export interface ServerProfile {
+	name: string;
+	url: string;
+	token: string;
+}
+
 export interface FnSyncSettings {
 	serverUrl: string;
 	token: string;
+	// 多环境地址方案：保存多组地址+token，手动切换；activeProfile 为空表示手动地址
+	profiles: ServerProfile[];
+	activeProfile: string;
 	// 触发方式（可组合）
 	syncOnStartup: boolean;
 	enableInterval: boolean;
@@ -20,6 +29,8 @@ export interface FnSyncSettings {
 export const DEFAULT_SETTINGS: FnSyncSettings = {
 	serverUrl: "",
 	token: "",
+	profiles: [],
+	activeProfile: "",
 	syncOnStartup: true,
 	enableInterval: true,
 	intervalMinutes: 5,

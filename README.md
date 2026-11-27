@@ -23,7 +23,8 @@
 1. **部署服务端**：见 [server/README.md](server/README.md)（NAS Docker Compose 一条命令），拿到 `serverUrl` 与 token
 2. **装插件**：把 `plugin/` 的 `manifest.json`、`main.js` 复制到 vault 的 `.obsidian/plugins/fnsync/`（本地构建：`cd plugin && npm install && npm run build`）
 3. **配置**：插件设置里填服务器地址 + token，「测试连接」通过即可
-4. 协议细节：[docs/protocol.md](docs/protocol.md)
+4. **多环境切换**：设置里「多环境地址方案」可保存多组「名称 + 地址 + token」（如家里 NAS 内网地址 / 公网穿透地址），命令面板「fn-sync: 切换服务器地址」一键切换，状态栏显示当前方案；切换指向不同服务器时会自动重置本地状态走快照重建，同一服务器的不同地址零成本对齐
+5. 协议细节：[docs/protocol.md](docs/protocol.md)
 
 ## 已知限制（如实告知）
 

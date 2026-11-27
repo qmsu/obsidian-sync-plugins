@@ -98,6 +98,16 @@ export class SyncEngine {
 		this.status.upOps = 0;
 		this.status.downOps = 0;
 		try {
+			// 服务端变更检测（多环境切换 / 手动改地址）：地址变了就重置本地状态，
+			// 下一步走快照对齐。同一服务器换地址时，内容哈希一致，重建零成本；
+			// 真换了服务器也能安全对齐，绝不拿旧游标污染新服务端。
+			const lastUrl = await this.state.kvGet<string>("serverUrl");
+			if (lastUrl !== undefined && lastUrl !== this.api.baseUrl) {
+				this.log.info(`服务端地址变更：${lastUrl} → ${this.api.baseUrl}，重置本地状态走快照重建`);
+				await this.state.wipeAll();
+			}
+			await this.state.kvSet("serverUrl", this.api.baseUrl);
+
 			// 本轮开始时锁定下载中的路径集合（pending ∪ failed）
 			this.blockedPaths = new Set<string>();
 			for (const p of await this.state.pendingAll()) this.blockedPaths.add(p.path);

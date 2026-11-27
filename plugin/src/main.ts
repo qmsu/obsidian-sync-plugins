@@ -2,10 +2,10 @@
 // 触发方式（可组合）：启动同步 / 定时同步 / 保存时同步（防抖）/ 手动命令。
 // 网络层统一走 requestUrl，桌面与手机同一份代码。
 // 移动端现实：进后台 JS 挂起，定时器只在前台活着；本插件在切回前台时补一轮。
-import { Plugin, TFile, Notice, PluginSettingTab, App, Setting } from "obsidian";
+import { Plugin, TFile, Notice, PluginSettingTab, App, Setting, Modal, SuggestModal } from "obsidian";
 import { Api } from "./api";
 import { SyncEngine, SyncStatus } from "./engine";
-import { DEFAULT_SETTINGS, FnSyncSettings } from "./settings";
+import { DEFAULT_SETTINGS, FnSyncSettings, ServerProfile } from "./settings";
 import { StateDB } from "./state";
 import { SyncLog, debounce, formatTime } from "./util";
 
@@ -46,6 +46,11 @@ export default class FnSyncPlugin extends Plugin {
 				new Notice("fn-sync：IndexedDB 打开失败，同步不可用（详见控制台）");
 			});
 
+		this.addCommand({
+			id: "switch-server",
+			name: "切换服务器地址",
+			callback: () => new SwitchServerModal(this).open(),
+		});
 		this.addCommand({
 			id: "sync-now",
 			name: "立即同步",
@@ -166,27 +171,83 @@ export default class FnSyncPlugin extends Plugin {
 		this.saveDebounced();
 	}
 
+	// ---- 多环境地址切换 ----
+
+	/** 应用一个地址方案（null = 回到手动地址，即设置里直接填的 serverUrl/token） */
+	async applyProfile(profile: ServerProfile | null): Promise<void> {
+		if (profile) {
+			this.settings.activeProfile = profile.name;
+			this.settings.serverUrl = profile.url;
+			this.settings.token = profile.token;
+		} else {
+			this.settings.activeProfile = "";
+		}
+		await this.saveSettings();
+		new Notice(
+			profile
+				? `fn-sync：已切换到「${profile.name}」${profile.url}`
+				: "fn-sync：已切换到手动地址",
+		);
+		if (this.engine) this.engine.requestSync("切换服务器地址");
+	}
+
 	// ---- 状态栏 ----
 
 	private updateStatusBar(): void {
 		if (!this.statusEl || !this.engine) return;
 		const s: SyncStatus = this.engine.status;
+		const tag = this.settings.activeProfile ? `[${this.settings.activeProfile}] ` : "";
 		let text = "";
 		switch (s.phase) {
 			case "syncing":
-				text = `fn-sync ⟳ 同步中 ↑${s.upOps} ↓${s.downOps}`;
+				text = `${tag}fn-sync ⟳ 同步中 ↑${s.upOps} ↓${s.downOps}`;
 				break;
 			case "error":
-				text = "fn-sync ⛔ 同步出错";
+				text = `${tag}fn-sync ⛔ 同步出错`;
 				break;
 			case "partial":
-				text = `fn-sync ⚠ 完成（${s.pendingFailures} 项失败）`;
+				text = `${tag}fn-sync ⚠ 完成（${s.pendingFailures} 项失败）`;
 				break;
 			case "idle":
-				text = s.lastSyncTime ? `fn-sync ✓ ${formatTime(new Date(s.lastSyncTime))}` : "fn-sync ✓";
+				text = s.lastSyncTime
+					? `${tag}fn-sync ✓ ${formatTime(new Date(s.lastSyncTime))}`
+					: `${tag}fn-sync ✓`;
 				break;
 		}
 		if (this.statusEl.textContent !== text) this.statusEl.textContent = text;
+	}
+}
+
+/** 地址方案切换弹窗：列出已保存方案 + 当前手动地址 */
+class SwitchServerModal extends SuggestModal<ServerProfile | { manual: true }> {
+	constructor(private plugin: FnSyncPlugin) {
+		super(plugin.app);
+	}
+
+	getSuggestions(): (ServerProfile | { manual: true })[] {
+		const out: (ServerProfile | { manual: true })[] = [];
+		if (this.plugin.settings.serverUrl) out.push({ manual: true });
+		out.push(...this.plugin.settings.profiles);
+		return out;
+	}
+
+	renderSuggestion(item: ServerProfile | { manual: true }, el: HTMLElement): void {
+		const active = this.plugin.settings.activeProfile;
+		if ("manual" in item) {
+			el.setText(`手动地址（设置里填写）${active === "" ? " ←当前" : ""}`);
+			el.createEl("small", { text: ` ${this.plugin.settings.serverUrl}`, cls: "fnsync-muted" });
+		} else {
+			el.setText(`${item.name}${active === item.name ? " ←当前" : ""}`);
+			el.createEl("small", { text: ` ${item.url}`, cls: "fnsync-muted" });
+		}
+	}
+
+	onChooseSuggestion(item: ServerProfile | { manual: true }): void {
+		if ("manual" in item) {
+			this.plugin.applyProfile(null);
+		} else {
+			this.plugin.applyProfile(item);
+		}
 	}
 }
 
@@ -234,6 +295,75 @@ class FnSyncSettingTab extends PluginSettingTab {
 					}
 				}),
 			);
+
+		new Setting(containerEl).setName("多环境地址方案").setHeading();
+		new Setting(containerEl)
+			.setName("当前方案")
+			.setDesc("切换后自动同步一轮；指向不同服务器时会自动重置本地状态走快照重建")
+			.addDropdown((d) => {
+				d.addOption("__manual__", "手动地址");
+				for (const p of s.profiles) d.addOption(p.name, p.name);
+				d.setValue(s.activeProfile || "__manual__").onChange(async (v) => {
+					if (v === "__manual__") {
+						await this.plugin.applyProfile(null);
+					} else {
+						const p = s.profiles.find((x) => x.name === v);
+						if (p) await this.plugin.applyProfile(p);
+					}
+					this.display();
+				});
+			});
+		s.profiles.forEach((p, i) => {
+			const row = new Setting(containerEl).setName(p.name || "（未命名）");
+			row.addText((t) => {
+				t.setPlaceholder("方案名").setValue(p.name);
+				t.inputEl.style.width = "7em";
+				t.onChange(async (v) => {
+					const oldName = p.name;
+					p.name = v.trim();
+					if (s.activeProfile === oldName) {
+						s.activeProfile = p.name;
+					}
+					await this.plugin.saveSettings();
+					this.display();
+				});
+			});
+			row.addText((t) =>
+				t.setPlaceholder("http://192.168.1.10:8788").setValue(p.url).onChange(async (v) => {
+					p.url = v.trim();
+					if (s.activeProfile === p.name) {
+						s.serverUrl = p.url;
+					}
+					await this.plugin.saveSettings();
+				}),
+			);
+			row.addText((t) => {
+				t.setPlaceholder("token").setValue(p.token);
+				t.inputEl.type = "password";
+				t.onChange(async (v) => {
+					p.token = v.trim();
+					if (s.activeProfile === p.name) {
+						s.token = p.token;
+					}
+					await this.plugin.saveSettings();
+				});
+			});
+			row.addButton((b) =>
+				b.setIcon("trash").setTooltip("删除方案").onClick(async () => {
+					s.profiles.splice(i, 1);
+					if (s.activeProfile === p.name) s.activeProfile = "";
+					await this.plugin.saveSettings();
+					this.display();
+				}),
+			);
+		});
+		new Setting(containerEl).addButton((b) =>
+			b.setButtonText("+ 新增方案").onClick(async () => {
+				s.profiles.push({ name: `方案${s.profiles.length + 1}`, url: "", token: "" });
+				await this.plugin.saveSettings();
+				this.display();
+			}),
+		);
 
 		new Setting(containerEl).setName("触发方式").setHeading();
 		new Setting(containerEl)
