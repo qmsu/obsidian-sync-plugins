@@ -23,7 +23,11 @@ import { Excluder, SyncLog, formatStamp, sha256Hex, sleep, toSyncPath, uuid } fr
 export interface SyncStatus {
 	phase: "idle" | "syncing" | "error" | "partial";
 	upOps: number;
+	upTotal: number; // 0=未知（增量场景总数不可预知）
 	downOps: number;
+	downTotal: number; // 0=未知
+	scanDone: number;
+	scanTotal: number;
 	pendingFailures: number;
 	lastSyncTime: number | null;
 	lastError: string | null;
@@ -39,7 +43,11 @@ export class SyncEngine {
 	status: SyncStatus = {
 		phase: "idle",
 		upOps: 0,
+		upTotal: 0,
 		downOps: 0,
+		downTotal: 0,
+		scanDone: 0,
+		scanTotal: 0,
 		pendingFailures: 0,
 		lastSyncTime: null,
 		lastError: null,
@@ -130,7 +138,11 @@ export class SyncEngine {
 	private async syncOnce(reason: string): Promise<void> {
 		this.status.phase = "syncing";
 		this.status.upOps = 0;
+		this.status.upTotal = 0;
 		this.status.downOps = 0;
+		this.status.downTotal = 0;
+		this.status.scanDone = 0;
+		this.status.scanTotal = 0;
 		try {
 			// 服务端变更检测（多环境切换 / 手动改地址）：地址变了就重置本地状态，
 			// 下一步走快照对齐。同一服务器换地址时，内容哈希一致，重建零成本；
@@ -181,6 +193,15 @@ export class SyncEngine {
 
 	private async pullPhase(): Promise<void> {
 		let cursor = (await this.state.kvGet<number>("cursor")) ?? 0;
+		// 首次同步（游标为 0 或要走快照）时，用服务端文件总数作下载进度分母
+		if (cursor === 0) {
+			try {
+				const h = await this.api.health();
+				this.status.downTotal = h.docs;
+			} catch {
+				// 拿不到总数就显示无分母进度
+			}
+		}
 		const resp = await this.api.pull(cursor, this.settings.pullBatchSize);
 		if (resp.needSnapshot) {
 			this.log.info("断点超出服务端保留窗口（或新设备），走分页快照对齐");
@@ -392,6 +413,7 @@ export class SyncEngine {
 	private async pushQueuedOps(): Promise<void> {
 		const ops = await this.state.opsDrain();
 		if (ops.length === 0) return;
+		this.status.upTotal += ops.length;
 		this.log.debug(`推送预排操作 ${ops.length} 条`);
 		try {
 			await this.pushOpBatches(ops);
@@ -480,13 +502,16 @@ export class SyncEngine {
 		}
 		if (tombstones.length > 0) {
 			this.log.info(`本地删除 ${tombstones.length} 个文件，推送墓碑`);
+			this.status.upTotal += tombstones.length;
 			await this.pushOpBatches(tombstones);
 		}
 
 		// 正向扫描：新增/修改（mtime+size 短路，变了才算哈希）
+		this.status.scanTotal = files.size;
 		type Change = { path: string; data: ArrayBuffer; hash: string; size: number; mtime: number };
 		const changed: Change[] = [];
 		for (const [rawPath, st] of files) {
+			this.status.scanDone++;
 			if (this.excluder.match(rawPath)) continue;
 			if (this.blockedPaths.has(rawPath)) continue; // 下载重试中，不推送
 			this.checkStop();
@@ -532,6 +557,7 @@ export class SyncEngine {
 			await this.retryPushConflictsIfAny();
 			return;
 		}
+		this.status.upTotal += changed.length;
 		this.log.info(`推送 ${changed.length} 个本地变更`);
 
 		// 分块处理，控制内存与请求体积

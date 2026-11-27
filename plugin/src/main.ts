@@ -229,11 +229,19 @@ export default class FnSyncPlugin extends Plugin {
 		const s: SyncStatus = this.engine.status;
 		const tag = this.settings.activeProfile ? `[${this.settings.activeProfile}] ` : "";
 		const pauseMark = this.engine.isPaused ? "⏸ " : "";
+		// 进度显示：有分母显示 已完成/总数，否则只显示已完成数；扫描阶段单独显示
+		const fmt = (done: number, total: number, arrow: string) =>
+			total > 0 ? `${arrow}${done}/${total}` : done > 0 ? `${arrow}${done}` : "";
+		const downPart = fmt(s.downOps, s.downTotal, "↓");
+		const upPart = fmt(s.upOps, s.upTotal, "↑");
+		const scanPart = s.scanTotal > 0 && s.scanDone < s.scanTotal ? `扫描 ${s.scanDone}/${s.scanTotal}` : "";
 		let text = "";
 		switch (s.phase) {
-			case "syncing":
-				text = `${pauseMark}${tag}fn-sync ⟳ 同步中 ↑${s.upOps} ↓${s.downOps}（点击停止）`;
+			case "syncing": {
+				const parts = [scanPart || "同步中", downPart, upPart].filter(Boolean).join(" ");
+				text = `${pauseMark}${tag}fn-sync ⟳ ${parts}（点击停止）`;
 				break;
+			}
 			case "error":
 				text = `${pauseMark}${tag}fn-sync ⛔ 同步出错`;
 				break;
