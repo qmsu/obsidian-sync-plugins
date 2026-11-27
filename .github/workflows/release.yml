@@ -1,0 +1,44 @@
+# 发布 Obsidian 插件：推 tag（如 0.1.0）→ 自动构建 → 创建同名 Release 并上传 main.js / manifest.json
+# 注意：Obsidian 社区市场要求 tag 与 manifest.json 的 version 完全一致
+name: Release Obsidian plugin
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build plugin
+        run: cd plugin && npm install && npm run build
+
+      - name: Check manifest version matches tag
+        run: |
+          VERSION=$(node -p "require('./plugin/manifest.json').version")
+          if [ "$VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "manifest version ($VERSION) 与 tag (${GITHUB_REF_NAME}) 不一致"
+            exit 1
+          fi
+
+      - name: Create release and upload assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" plugin/main.js plugin/manifest.json --clobber
+          else
+            gh release create "$TAG" plugin/main.js plugin/manifest.json \
+              --title "$TAG" --generate-notes
+          fi
