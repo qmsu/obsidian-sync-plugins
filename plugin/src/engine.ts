@@ -490,22 +490,26 @@ export class SyncEngine {
 		const CHUNK = 25;
 		for (let i = 0; i < changed.length; i += CHUNK) {
 			const group = changed.slice(i, i + CHUNK);
-			// 确保服务端已有 blob（内容寻址，同一内容全库只传一次）
+			// 确保服务端已有 blob（内容寻址，同一内容全库只传一次）。
+			// 单个上传失败只跳过该文件（下轮自动重试），不拖死同批其他文件。
 			const missing = await this.api.blobsExist(group.map((c) => c.hash));
+			const ops: QueuedOp[] = [];
 			for (const c of group) {
 				if (missing.includes(c.hash)) {
-					await this.api.blobPut(c.hash, c.data);
-					this.log.debug(`上传 blob：${c.path}（${c.size} 字节）`);
+					try {
+						await this.api.blobPut(c.hash, c.data);
+						this.log.debug(`上传 blob：${c.path}（${c.size} 字节）`);
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						this.log.warn(`上传失败，下轮重试：${c.path}（${c.size} 字节，hash ${c.hash.slice(0, 8)}…）：${msg}`);
+						continue;
+					}
 				}
+				ops.push({ path: c.path, hash: c.hash, size: c.size, mtime: c.mtime, deleted: false });
 			}
-			const ops: QueuedOp[] = group.map((c) => ({
-				path: c.path,
-				hash: c.hash,
-				size: c.size,
-				mtime: c.mtime,
-				deleted: false,
-			}));
-			await this.pushOpBatches(ops);
+			if (ops.length > 0) {
+				await this.pushOpBatches(ops);
+			}
 		}
 		await this.retryPushConflictsIfAny();
 	}
