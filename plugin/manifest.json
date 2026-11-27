@@ -1,10 +1,9 @@
 {
   "id": "fnsync",
   "name": "FN Sync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.4.0",
-  "description": "Sync your vault to your own self-hosted server (Go, NAS-friendly). Content-addressed incremental sync, resumable transfers, automatic conflict resolution with conflict copies, multi-server profiles. Desktop & mobile. 自建服务端源文件同步。"
-  ,
+  "description": "Sync your vault to your own self-hosted server (Go, NAS-friendly). Content-addressed incremental sync, resumable transfers, automatic conflict resolution with conflict copies, multi-server profiles. Desktop & mobile. 自建服务端源文件同步。",
   "author": "zg",
   "authorUrl": "https://github.com/qmsu",
   "isDesktopOnly": false

@@ -1,6 +1,6 @@
 {
   "name": "fnsync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Obsidian vault 文件同步插件（配 obsidian-sync-plugins-server 使用）",
   "main": "main.js",
   "scripts": {
