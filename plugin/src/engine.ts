@@ -32,6 +32,9 @@ export interface SyncStatus {
 const MAX_PENDING_ATTEMPTS = 8;
 const CONFLICT_DIR = ".conflicts";
 
+/** 手动停止信号：协作式取消，在各阶段边界检查 */
+export class StopSignal extends Error {}
+
 export class SyncEngine {
 	status: SyncStatus = {
 		phase: "idle",
@@ -44,6 +47,8 @@ export class SyncEngine {
 
 	private syncing = false;
 	private dirty = false;
+	private stopRequested = false;
+	private paused = false;
 	private inFlight = new Set<string>();
 	private blockedPaths = new Set<string>(); // pending/failed 下载中的路径：推送扫描时屏蔽，防回环
 	private excluder: Excluder;
@@ -77,10 +82,16 @@ export class SyncEngine {
 		this.log.debug(`requestSync: ${reason}`);
 		if (this.syncing) return;
 		this.syncing = true;
+		this.stopRequested = false;
 		try {
 			while (this.dirty) {
 				this.dirty = false;
-				await this.syncOnce(reason);
+				try {
+					await this.syncOnce(reason);
+				} catch (err) {
+					if (err instanceof StopSignal) break; // 手动停止：终止整轮循环
+					throw err;
+				}
 			}
 		} finally {
 			this.syncing = false;
@@ -89,6 +100,29 @@ export class SyncEngine {
 
 	get isSyncing(): boolean {
 		return this.syncing;
+	}
+
+	/** 手动停止本轮同步（当前 HTTP 请求无法中断，之后的步骤不再执行） */
+	stopSync(): void {
+		if (this.syncing) {
+			this.stopRequested = true;
+			this.log.info("收到手动停止请求");
+		}
+	}
+
+	/** 暂停/恢复自动同步（定时/保存/启动触发器）。返回暂停后的状态。 */
+	togglePause(): boolean {
+		this.paused = !this.paused;
+		this.log.info(this.paused ? "已暂停自动同步（手动同步不受影响）" : "已恢复自动同步");
+		return this.paused;
+	}
+
+	get isPaused(): boolean {
+		return this.paused;
+	}
+
+	private checkStop(): void {
+		if (this.stopRequested) throw new StopSignal();
 	}
 
 	// ---- 一轮同步 ----
@@ -114,14 +148,23 @@ export class SyncEngine {
 			for (const p of await this.state.failedAll()) this.blockedPaths.add(p.path);
 
 			await this.recoverPending();
+			this.checkStop();
 			await this.pullPhase();
+			this.checkStop();
 			await this.pushQueuedOps();
+			this.checkStop();
 			await this.pushPhase();
 			this.status.phase = this.status.pendingFailures > 0 ? "partial" : "idle";
 			this.status.lastSyncTime = Date.now();
 			this.status.lastError = null;
 			this.log.info(`同步完成（${reason}）`);
 		} catch (err) {
+			if (err instanceof StopSignal) {
+				// 停止不算错误：状态归位，交给 runLoop 终止循环
+				this.status.phase = this.status.pendingFailures > 0 ? "partial" : "idle";
+				this.log.info(`同步已手动停止（${reason}）`);
+				throw err;
+			}
 			const msg = err instanceof Error ? err.message : String(err);
 			const isNewError = this.status.lastError !== msg;
 			this.status.phase = "error";
@@ -147,6 +190,7 @@ export class SyncEngine {
 		}
 		let since = cursor;
 		for (;;) {
+			this.checkStop();
 			const batch = await this.api.pull(since, this.settings.pullBatchSize);
 			if (batch.needSnapshot) {
 				// 拉取中途服务端变更流被清理 → 转快照
@@ -167,6 +211,7 @@ export class SyncEngine {
 		let after = "";
 		let cursor = defaultCursor;
 		for (;;) {
+			this.checkStop();
 			const page = await this.api.snapshotPage(after, 500);
 			await this.applyChanges(page.changes, true);
 			cursor = page.cursor;
@@ -179,6 +224,7 @@ export class SyncEngine {
 	/** 应用一批远端变更。rebuild=true 表示快照页（未知基线按"不可信本地"处理）。 */
 	private async applyChanges(changes: PullChange[] | null | undefined, rebuild = false): Promise<void> {
 		for (const ch of changes ?? []) {
+			this.checkStop();
 			if (this.excluder.match(ch.path)) continue;
 			try {
 				if (ch.deleted) {
@@ -271,6 +317,7 @@ export class SyncEngine {
 		const pending = await this.state.pendingAll();
 		this.status.pendingFailures = 0;
 		for (const p of pending) {
+			this.checkStop();
 			try {
 				const data = await this.api.blobGet(p.hash, p.size);
 				await this.writeBinarySuppressed(p.path, data, p.hash);
@@ -442,6 +489,7 @@ export class SyncEngine {
 		for (const [rawPath, st] of files) {
 			if (this.excluder.match(rawPath)) continue;
 			if (this.blockedPaths.has(rawPath)) continue; // 下载重试中，不推送
+			this.checkStop();
 			const rec = recs.get(rawPath);
 			if (rec && rec.scanMtime === st.mtime && rec.scanSize === st.size && rec.scanHash === rec.baseHash) {
 				continue; // 未变
@@ -489,6 +537,7 @@ export class SyncEngine {
 		// 分块处理，控制内存与请求体积
 		const CHUNK = 25;
 		for (let i = 0; i < changed.length; i += CHUNK) {
+			this.checkStop();
 			const group = changed.slice(i, i + CHUNK);
 			// 确保服务端已有 blob（内容寻址，同一内容全库只传一次）。
 			// 单个上传失败只跳过该文件（下轮自动重试），不拖死同批其他文件。
@@ -536,6 +585,7 @@ export class SyncEngine {
 	private async pushOpBatchWithRetry(ops: QueuedOp[]): Promise<void> {
 		const batchId = uuid();
 		for (let attempt = 0; attempt < 4; attempt++) {
+			this.checkStop();
 			try {
 				const resp = await this.api.push(batchId, ops);
 				if (resp.conflicts && resp.conflicts.length > 0) {

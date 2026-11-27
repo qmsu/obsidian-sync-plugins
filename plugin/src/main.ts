@@ -2,7 +2,7 @@
 // 触发方式（可组合）：启动同步 / 定时同步 / 保存时同步（防抖）/ 手动命令。
 // 网络层统一走 requestUrl，桌面与手机同一份代码。
 // 移动端现实：进后台 JS 挂起，定时器只在前台活着；本插件在切回前台时补一轮。
-import { Plugin, TFile, Notice, PluginSettingTab, App, Setting, Modal, SuggestModal } from "obsidian";
+import { Plugin, TFile, Notice, PluginSettingTab, App, Setting, Modal, SuggestModal, setIcon } from "obsidian";
 import { Api, ApiError } from "./api";
 import { SyncEngine, SyncStatus } from "./engine";
 import { DEFAULT_SETTINGS, FnSyncSettings, ServerProfile } from "./settings";
@@ -16,6 +16,7 @@ export default class FnSyncPlugin extends Plugin {
 	engine!: SyncEngine;
 	log!: SyncLog;
 	private statusEl: HTMLElement | null = null;
+	private ribbonIcon: HTMLElement | null = null;
 	private minuteTimer: number | null = null;
 	private saveDebounced: (() => void) | null = null;
 
@@ -50,6 +51,15 @@ export default class FnSyncPlugin extends Plugin {
 			id: "switch-server",
 			name: "切换服务器地址",
 			callback: () => new SwitchServerModal(this).open(),
+		});
+		this.addCommand({
+			id: "toggle-pause",
+			name: "暂停 / 恢复自动同步",
+			callback: () => {
+				if (!this.engine) return;
+				const paused = this.engine.togglePause();
+				new Notice(paused ? "fn-sync：已暂停自动同步（手动同步不受影响）" : "fn-sync：已恢复自动同步");
+			},
 		});
 		this.addCommand({
 			id: "sync-now",
@@ -92,9 +102,23 @@ export default class FnSyncPlugin extends Plugin {
 		this.addSettingTab(new FnSyncSettingTab(this.app, this));
 
 		this.statusEl = this.addStatusBarItem();
+		this.statusEl.addEventListener("click", () => this.onSyncButton());
+		this.statusEl.setCssStyles({ cursor: "pointer" });
+		this.ribbonIcon = this.addRibbonIcon("refresh-cw", "fn-sync：同步 / 停止", () => this.onSyncButton());
 		this.updateStatusBar();
 		const timer = window.setInterval(() => this.updateStatusBar(), 1000);
 		this.registerInterval(timer);
+	}
+
+	/** 同步按钮：空闲→立即同步；同步中→请求停止本轮 */
+	private onSyncButton(): void {
+		if (!this.engine) return;
+		if (this.engine.isSyncing) {
+			this.engine.stopSync();
+			new Notice("fn-sync：已请求停止本轮同步");
+		} else {
+			this.engine.requestSync("手动按钮");
+		}
 	}
 
 	onunload(): void {}
@@ -119,7 +143,9 @@ export default class FnSyncPlugin extends Plugin {
 		// 启动同步
 		if (this.settings.syncOnStartup) {
 			this.app.workspace.onLayoutReady(() => {
-				if (this.engine && !this.engine.isSyncing) this.engine.requestSync("启动");
+				if (this.engine && !this.engine.isSyncing && !this.engine.isPaused) {
+					this.engine.requestSync("启动");
+				}
 			});
 		}
 		// 定时同步：每分钟检查是否到期。手机端后台 JS 会挂起，定时器只在前台活着；
@@ -136,7 +162,7 @@ export default class FnSyncPlugin extends Plugin {
 	};
 
 	private checkIntervalDue(force = false): void {
-		if (!this.settings.enableInterval || !this.engine) return;
+		if (!this.settings.enableInterval || !this.engine || this.engine.isPaused) return;
 		const mobile = (this.app as unknown as { isMobile: boolean }).isMobile === true;
 		const intervalMin = mobile ? this.settings.mobileIntervalMinutes : this.settings.intervalMinutes;
 		if (intervalMin <= 0) return;
@@ -169,7 +195,7 @@ export default class FnSyncPlugin extends Plugin {
 	}
 
 	private scheduleSaveSync(): void {
-		if (!this.settings.syncOnSave || !this.engine) return;
+		if (!this.settings.syncOnSave || !this.engine || this.engine.isPaused) return;
 		if (!this.saveDebounced) {
 			this.saveDebounced = debounce(() => this.engine.requestSync("保存"), this.settings.saveDebounceSeconds * 1000);
 		}
@@ -202,24 +228,34 @@ export default class FnSyncPlugin extends Plugin {
 		if (!this.statusEl || !this.engine) return;
 		const s: SyncStatus = this.engine.status;
 		const tag = this.settings.activeProfile ? `[${this.settings.activeProfile}] ` : "";
+		const pauseMark = this.engine.isPaused ? "⏸ " : "";
 		let text = "";
 		switch (s.phase) {
 			case "syncing":
-				text = `${tag}fn-sync ⟳ 同步中 ↑${s.upOps} ↓${s.downOps}`;
+				text = `${pauseMark}${tag}fn-sync ⟳ 同步中 ↑${s.upOps} ↓${s.downOps}（点击停止）`;
 				break;
 			case "error":
-				text = `${tag}fn-sync ⛔ 同步出错`;
+				text = `${pauseMark}${tag}fn-sync ⛔ 同步出错`;
 				break;
 			case "partial":
-				text = `${tag}fn-sync ⚠ 完成（${s.pendingFailures} 项失败）`;
+				text = `${pauseMark}${tag}fn-sync ⚠ 完成（${s.pendingFailures} 项失败）`;
 				break;
 			case "idle":
 				text = s.lastSyncTime
-					? `${tag}fn-sync ✓ ${formatTime(new Date(s.lastSyncTime))}`
-					: `${tag}fn-sync ✓`;
+					? `${pauseMark}${tag}fn-sync ✓ ${formatTime(new Date(s.lastSyncTime))}`
+					: `${pauseMark}${tag}fn-sync ✓`;
 				break;
 		}
 		if (this.statusEl.textContent !== text) this.statusEl.textContent = text;
+		if (this.ribbonIcon) {
+			// 同步中显示停止图标（square），空闲显示同步图标
+			const icon = s.phase === "syncing" ? "square" : "refresh-cw";
+			if (this.ribbonIcon.dataset.icon !== icon) {
+				this.ribbonIcon.dataset.icon = icon;
+				setIcon(this.ribbonIcon, icon);
+			}
+			this.ribbonIcon.setAttribute("aria-label", `${pauseMark}${tag}fn-sync：${s.phase === "syncing" ? "停止本轮同步" : "立即同步"}`);
+		}
 	}
 }
 
