@@ -3,7 +3,7 @@
 // 网络层统一走 requestUrl，桌面与手机同一份代码。
 // 移动端现实：进后台 JS 挂起，定时器只在前台活着；本插件在切回前台时补一轮。
 import { Plugin, TFile, Notice, PluginSettingTab, App, Setting, Modal, SuggestModal } from "obsidian";
-import { Api } from "./api";
+import { Api, ApiError } from "./api";
 import { SyncEngine, SyncStatus } from "./engine";
 import { DEFAULT_SETTINGS, FnSyncSettings, ServerProfile } from "./settings";
 import { StateDB } from "./state";
@@ -286,10 +286,18 @@ class FnSyncSettingTab extends PluginSettingTab {
 			.setName("测试连接")
 			.addButton((b) =>
 				b.setButtonText("测试").onClick(async () => {
+					const api = new Api(s.serverUrl.trim(), s.token.trim());
 					try {
-						const api = new Api(s.serverUrl.trim(), s.token.trim());
 						const h = await api.health();
-						new Notice(`连接成功：服务端 ${h.docs} 个文件，${(h.blobBytes / 1048576).toFixed(1)} MB blob`);
+						try {
+							await api.authProbe();
+							new Notice(`连接成功：服务端 ${h.docs} 个文件，${(h.blobBytes / 1048576).toFixed(1)} MB blob，token 验证通过`);
+						} catch (err) {
+							const msg = err instanceof ApiError && err.status === 401
+								? "token 错误（401）—— 与服务端 OSPS_TOKEN 不一致"
+								: String(err);
+							new Notice(`网络通了，但鉴权失败：${msg}`);
+						}
 					} catch (err) {
 						new Notice(`连接失败：${String(err)}`);
 					}

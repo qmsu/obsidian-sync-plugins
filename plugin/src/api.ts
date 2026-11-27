@@ -106,6 +106,12 @@ export class Api {
 		return this.reqJSON("GET", "/health", undefined, 10000);
 	}
 
+	/** 鉴权探测：/health 免鉴权测不出 token 对错，用需鉴权的接口真实验证 */
+	async authProbe(): Promise<{ ok: boolean }> {
+		await this.reqJSON("GET", "/api/v1/meta/pull?since=0&limit=1");
+		return { ok: true };
+	}
+
 	async pull(since: number, limit: number): Promise<PullResp> {
 		return this.reqJSON("GET", `/api/v1/meta/pull?since=${since}&limit=${limit}`);
 	}

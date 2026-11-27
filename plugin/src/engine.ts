@@ -123,9 +123,14 @@ export class SyncEngine {
 			this.log.info(`同步完成（${reason}）`);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
+			const isNewError = this.status.lastError !== msg;
 			this.status.phase = "error";
 			this.status.lastError = msg;
 			this.log.error(`同步失败（${reason}）：${msg}`);
+			// 失败要显式可见：同一错误只弹一次，换错误再弹
+			if (isNewError) {
+				new Notice(`fn-sync 同步失败：${msg}`, 8000);
+			}
 		}
 	}
 
