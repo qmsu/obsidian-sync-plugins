@@ -16,3 +16,4 @@ plugin/package-lock.json
 .env
 *.log
 .DS_Store
+server/release/

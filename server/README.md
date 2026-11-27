@@ -15,6 +15,19 @@ OSPS_TOKEN='devtoken' go run . -db ./dev.db -blobs ./dev-blobs -bind 127.0.0.1:8
 
 ## Docker 部署（NAS 推荐）
 
+最省事的方式——一键打包并部署到 NAS（Mac 上执行，NAS 上只要装了 Docker 和 ssh）：
+
+```bash
+cd server
+./scripts/build-image.sh --deploy zg@192.168.1.10 --remote-dir /opt/obsidian-sync
+# NAS 架构与本机不同时（Mac M 系列 → 多数 NAS 是 amd64）：
+./scripts/build-image.sh --platform=linux/amd64 --deploy zg@192.168.1.10 --remote-dir /opt/obsidian-sync
+```
+
+脚本做四件事：构建镜像（tag 用 git 版本号）→ 导出 `release/image/*.tar.gz` → scp 到 NAS `docker load` → 远端目录缺 `docker-compose.yml`/`.env` 时补齐（首次会生成 .env 模板，**记得改 OSPS_TOKEN**）→ `docker compose up -d`。
+
+手动方式：
+
 ```bash
 cd server
 cp .env.example .env          # 改 OSPS_TOKEN（openssl rand -hex 32）
