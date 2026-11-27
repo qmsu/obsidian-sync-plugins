@@ -1,0 +1,26 @@
+# 开发模式：源码 bind-mount 进容器跑 go run，改代码后 `docker compose -f docker-compose.dev.yml restart` 即可，
+# 不用重建镜像。数据与生产 compose 共用 ./data。
+#
+#   cp .env.example .env && 改 OSPS_TOKEN
+#   docker compose -f docker-compose.dev.yml up -d --build   # 首次（构建一次，之后不再重建）
+#   docker compose -f docker-compose.dev.yml restart         # 每次改完 Go 代码
+services:
+  obsidian-sync-dev:
+    build:
+      context: .
+      target: build # 复用构建阶段的 golang:1.24-alpine 镜像
+    container_name: obsidian-sync-dev
+    restart: unless-stopped
+    working_dir: /src
+    command: go run . -db /data/obsidian-sync.db -blobs /data/blobs -bind 0.0.0.0:8788
+    environment:
+      OSPS_TOKEN: ${OSPS_TOKEN:?请在 .env 中设置 OSPS_TOKEN}
+    volumes:
+      - .:/src # 源码实时挂载
+      - gomod-cache:/go/pkg/mod # Go 模块缓存持久化，重启不用重新下载
+      - ./data:/data
+    ports:
+      - "8788:8788"
+
+volumes:
+  gomod-cache:

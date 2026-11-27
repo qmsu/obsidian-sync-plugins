@@ -13,6 +13,14 @@ go test ./...
 OSPS_TOKEN='devtoken' go run . -db ./dev.db -blobs ./dev-blobs -bind 127.0.0.1:8788
 ```
 
+改代码不想重建镜像时，用开发模式（源码挂载 + go run，`restart` 生效）：
+
+```bash
+cp .env.example .env && 改 OSPS_TOKEN
+docker compose -f docker-compose.dev.yml up -d --build   # 只在首次需要 --build
+docker compose -f docker-compose.dev.yml restart         # 之后每次改完 Go 代码
+```
+
 ## Docker 部署（NAS 推荐）
 
 最省事的方式——一键打包并部署到 NAS（Mac 上执行，NAS 上只要装了 Docker 和 ssh）：
