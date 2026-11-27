@@ -66,6 +66,11 @@ export default class FnSyncPlugin extends Plugin {
 			},
 		});
 		this.addCommand({
+			id: "view-log",
+			name: "查看同步日志",
+			callback: () => new LogModal(this.app, () => this.log.exportText()).open(),
+		});
+		this.addCommand({
 			id: "export-log",
 			name: "导出同步日志",
 			callback: async () => {
@@ -251,6 +256,54 @@ class SwitchServerModal extends SuggestModal<ServerProfile | { manual: true }> {
 	}
 }
 
+/** 同步日志查看器：命令面板「查看同步日志」直接弹出，不用导出文件 */
+class LogModal extends Modal {
+	constructor(
+		app: App,
+		private getContent: () => string,
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.createEl("h3", { text: "fn-sync 同步日志（最近 800 条）" });
+		const pre = contentEl.createEl("pre");
+		pre.setText(this.getContent() || "（暂无日志）");
+		pre.setCssStyles({
+			maxHeight: "55vh",
+			overflow: "auto",
+			fontSize: "12px",
+			whiteSpace: "pre-wrap",
+			wordBreak: "break-all",
+			background: "var(--background-secondary)",
+			padding: "10px",
+			borderRadius: "6px",
+		});
+		const btns = contentEl.createDiv();
+		btns.setCssStyles({ display: "flex", gap: "8px", marginTop: "10px" });
+		btns
+			.createEl("button", { text: "刷新" })
+			.addEventListener("click", () => pre.setText(this.getContent() || "（暂无日志）"));
+		btns.createEl("button", { text: "复制全部" }).addEventListener("click", async () => {
+			await navigator.clipboard.writeText(this.getContent());
+			new Notice("已复制");
+		});
+		btns.createEl("button", { text: "导出到文件" }).addEventListener("click", async () => {
+			const text = this.getContent();
+			// 通过全局 app 引用写文件（Modal 里拿不到插件实例）
+			const adapter = (this.app.vault as { adapter: { write(p: string, d: string): Promise<void> } }).adapter;
+			await adapter.write(".fn-sync-log.txt", text);
+			new Notice("已写入 vault 根目录 .fn-sync-log.txt");
+		});
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
 class FnSyncSettingTab extends PluginSettingTab {
 	constructor(app: App, private plugin: FnSyncPlugin) {
 		super(app, plugin);
@@ -333,7 +386,8 @@ class FnSyncSettingTab extends PluginSettingTab {
 						s.activeProfile = p.name;
 					}
 					await this.plugin.saveSettings();
-					this.display();
+					// 不整页重渲染（会销毁输入框丢焦点）；只更新行标题
+					row.setName(p.name || "（未命名）");
 				});
 			});
 			row.addText((t) =>
